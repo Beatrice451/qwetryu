@@ -1,0 +1,5 @@
+.qodo
+.env
+.idea
+*.md
+__pycache__
