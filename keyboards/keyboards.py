@@ -58,15 +58,15 @@ def delivery_time_keyboard():
     keyboard.add(*buttons)
     return keyboard
 
-def admin_keyboard():
-    keyboard = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    buttons = [
-        KeyboardButton("Добавить новый товар"),
-        KeyboardButton("Удалить товар"),
-        KeyboardButton("Посмотреть заказы")
-    ]
-    keyboard.add(*buttons)
-    return keyboard
+def admin_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="Добавить новый товар"), KeyboardButton(text="Удалить товар")],
+            [KeyboardButton(text="Посмотреть заказы")]
+        ],
+        resize_keyboard=True,
+        input_field_placeholder="Выберите действие"
+    )
 
 def product_delete_keyboard(product_id):
     keyboard = InlineKeyboardMarkup()
