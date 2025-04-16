@@ -5,10 +5,11 @@ from keyboards.keyboards import nav_keyboard, categories_keyboard, get_product_i
     delivery_time_keyboard, get_cart_item_markup
 from db.db_utils import get_user, register_user, get_category_by_name, get_products_by_category, get_order_history, \
     get_order_items, get_order_status, create_order, get_product_details, get_delivery_types, add_to_cart, \
-    get_cart_items, remove_cart_item, update_cart_item_quantity
+    get_cart_items, remove_cart_item, update_cart_item_quantity, get_menu_categories
 from states.states import Registration, Order
 from aiogram.filters import Command, StateFilter
 
+category_names = [i[1] for i in get_menu_categories()]
 
 async def start_command(message: types.Message, state: FSMContext):
     user = get_user(message.from_user.id)
@@ -291,7 +292,7 @@ def register_user_handlers(dp: Dispatcher):
     dp.message.register(process_phone, StateFilter(Registration.waiting_for_phone))
 
     dp.message.register(view_menu, F.text == "Просмотр меню")
-    dp.message.register(process_category, F.text != "Назад")
+    dp.message.register(process_category, lambda msg: msg.text in category_names)
     dp.callback_query.register(process_add_to_cart, F.data.startswith("add_to_cart:"))
 
     dp.message.register(view_order_history, F.text == "История заказов")

@@ -15,10 +15,10 @@ from aiogram.filters import Command
 async def admin_command(message: types.Message, state: FSMContext):
     admin = get_admin_by_tg_id(message.from_user.id)
     if not is_admin(message.from_user.id) and admin is None:
-        await Admin.waiting_for_password.set()
+        await state.set_state(Admin.waiting_for_password)
         await message.answer("Вы не зарегистрированы как администратор. Для регистрации введите пароль:")
     elif not is_admin(message.from_user.id):
-       await Admin.waiting_for_password.set()
+       await state.set_state(Admin.waiting_for_password)
        await message.answer("Введите пароль администратора:")
 
     else:
@@ -37,7 +37,7 @@ async def process_admin_password(message: types.Message, state: FSMContext):
     else:
         await state.update_data(password=message.text)
         await message.answer("Введите ваше имя:")
-        await Registration.waiting_for_name.set()
+        await state.set_state(Registration.waiting_for_name)
 
 # Обработчик регистрации администратора
 async def process_admin_name(message: types.Message, state: FSMContext):
@@ -164,7 +164,7 @@ async def delete_product_confirmation(callback_query: types.CallbackQuery, state
 
 def register_admin_handlers(dp: Dispatcher):
     dp.message.register(admin_command, Command("admin"))
-    dp.message.register(process_admin_password, F.state == Admin.waiting_for_password)
+    dp.message.register(process_admin_password, Admin.waiting_for_password)
     dp.message.register(process_admin_name, F.state == Registration.waiting_for_name)
     dp.message.register(process_admin_phone, F.state == Registration.waiting_for_phone)
 
