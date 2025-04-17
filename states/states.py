@@ -24,3 +24,6 @@ class Admin(StatesGroup):
     adding_product_image = State()
     deleting_product_category = State()
     deleting_product_confirmation = State()
+    waiting_for_name = State()
+    waiting_for_phone = State()
+    registering_password = State()
