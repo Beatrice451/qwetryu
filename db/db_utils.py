@@ -1,7 +1,7 @@
-import mysql.connector
 import logging
+
 import bcrypt  # Для хеширования паролей
-from datetime import datetime
+import mysql.connector
 
 from config import DB_HOST, DB_USER, DB_PASSWORD, DB_NAME
 
@@ -203,7 +203,7 @@ def get_order_status(tg_user_id):
             mycursor.execute(sql, val)
             result = mycursor.fetchone()
             if result:
-                return result[0]
+                return result
             else:
                 return None
         except mysql.connector.Error as err:
@@ -399,9 +399,9 @@ def verify_admin_password(tg_user_id, password):
     mydb = connect_to_db()
     if mydb:
         mycursor = mydb.cursor(dictionary=True)
-        sql = "SELECT password FROM admin WHERE tg_user_id = %s"
+        sql = "SELECT password FROM admin LIMIT 1"
         try:
-            mycursor.execute(sql, (tg_user_id,))
+            mycursor.execute(sql)
             admin = mycursor.fetchone()
             if admin:
                 hashed_password = admin['password']
@@ -415,25 +415,6 @@ def verify_admin_password(tg_user_id, password):
             mycursor.close()
             mydb.close()
     return False
-
-
-def get_product_details(product_id):
-    mydb = connect_to_db()
-    if mydb:
-        mycursor = mydb.cursor(dictionary=True)
-        sql = "SELECT name, price FROM product WHERE id_product = %s"
-        try:
-            mycursor.execute(sql, (product_id,))
-            product = mycursor.fetchone()
-            return product
-        except mysql.connector.Error as err:
-            logging.error(f"Ошибка получения деталей товара: {err}")
-            return None
-        finally:
-            mycursor.close()
-            mydb.close()
-    return None
-
 
 def get_delivery_types():
     mydb = connect_to_db()
@@ -592,3 +573,45 @@ def remove_cart_item(cart_item_id):
             mycursor.close()
             mydb.close()
     return False
+
+
+
+def has_any_admins():
+    """
+    Проверяет, есть ли хотя бы один администратор в базе данных.
+
+    :return: True, если есть хотя бы один администратор, иначе False.
+    """
+    mydb = connect_to_db()
+    if mydb is None:
+        return False
+
+    try:
+        with mydb.cursor() as mycursor:
+            mycursor.execute("SELECT COUNT(*) FROM admin")
+            result = mycursor.fetchone()
+            logging.info(f"Количество администраторов: {result[0]}")
+            return bool(result and result[0] > 0)
+    except mysql.connector.Error as err:
+        logging.error(f"Ошибка проверки наличия администраторов: {err}")
+        return False
+    finally:
+        mydb.close()
+        mycursor.close()
+
+
+def get_product_details(product_id):
+    mydb = connect_to_db()
+    if mydb:
+        mycursor = mydb.cursor(dictionary=True)
+        try:
+            sql = "SELECT * FROM product WHERE id_product = %s"
+            mycursor.execute(sql, (product_id,))
+            product = mycursor.fetchone()
+            return product
+        except mysql.connector.Error as err:
+            logging.error(f"Ошибка получения деталей продукта: {err}")
+            return None
+        finally:
+            mycursor.close()
+            mydb.close()
