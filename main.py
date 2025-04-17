@@ -1,10 +1,12 @@
 # main.py
 
-import logging
 import asyncio
+import logging
+
 from aiogram import Bot, Dispatcher, types
-from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.filters import Command
+from aiogram.fsm.storage.memory import MemoryStorage
+
 from config import BOT_TOKEN
 from handlers import user_handlers, admin_handlers
 

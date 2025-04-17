@@ -1,7 +1,9 @@
 
 
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
+
 from db.db_utils import get_menu_categories, get_delivery_types
+
 
 # Навигационное меню
 def nav_keyboard():
