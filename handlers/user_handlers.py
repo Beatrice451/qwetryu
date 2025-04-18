@@ -1,13 +1,15 @@
+import logging
+
 from aiogram import types, Dispatcher, F
+from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 
-from keyboards.keyboards import nav_keyboard, categories_keyboard, get_product_inline_markup, get_delivery_type_markup, \
-    delivery_time_keyboard, get_cart_item_markup
 from db.db_utils import get_user, register_user, get_category_by_name, get_products_by_category, get_order_history, \
     get_order_items, get_order_status, create_order, get_product_details, get_delivery_types, add_to_cart, \
     get_cart_items, remove_cart_item, update_cart_item_quantity, get_menu_categories
+from keyboards.keyboards import nav_keyboard, categories_keyboard, get_delivery_type_markup, \
+    delivery_time_keyboard, get_cart_item_markup
 from states.states import Registration, Order
-from aiogram.filters import Command, StateFilter
 
 category_names = [i[1] for i in get_menu_categories()]
 
@@ -18,8 +20,10 @@ async def start_command(message: types.Message, state: FSMContext):
                              reply_markup=nav_keyboard())
     else:
         await message.answer(
-            "Привет! Похоже, вы впервые здесь. Пожалуйста, пройдите регистрацию, чтобы пользоваться ботом.")
+            "Привет! Похоже, вы впервые здесь. Пожалуйста, пройдите регистрацию, чтобы пользоваться ботом.",
+        reply_markup=types.ReplyKeyboardRemove())
         await state.set_state(Registration.waiting_for_name)
+
         await message.answer("Введите ваше имя:")
 
 
@@ -59,14 +63,48 @@ async def profile_command(message: types.Message):
 
 
 async def view_menu(message: types.Message):
-    keyboard = categories_keyboard()
-    if keyboard:
+    user = get_user(message.from_user.id)
+    if user:
+        keyboard = categories_keyboard()
         await message.answer("Выберите категорию:", reply_markup=keyboard)
     else:
-        await message.answer("Не удалось загрузить категории меню.")
+        await message.answer("Пожалуйста, зарегистрируйтесь, чтобы просмотреть меню. Используйте /start.")
 
+
+# async def process_category(message: types.Message):
+#     user = get_user(message.from_user.id)
+#     if user:
+#         category_name = message.text.strip()
+#
+#         if category_name == "Назад":
+#             await message.answer("Вы вернулись в главное меню.")
+#             return
+#
+#         category = get_category_by_name(category_name)
+#         if category is None:
+#             await message.answer("Категория не найдена.")
+#             return
+#
+#         products = get_products_by_category(category['id_category'])
+#
+#         if products:
+#             text = "\n\n".join([f"{p['name']} — {p['price']}₽" for p in products])
+#         else:
+#             text = "В этой категории пока нет товаров."
+#
+#         await message.answer(text)
+#     else:
+#         await message.answer("Пожалуйста, зарегистрируйтесь, чтобы просмотреть меню. Используйте /start.")
+
+import os
+from aiogram.types import FSInputFile
 
 async def process_category(message: types.Message):
+    user = get_user(message.from_user.id)
+    if not user:
+        await message.answer("Пожалуйста, зарегистрируйтесь, чтобы просмотреть меню. Используйте /start.")
+        return
+
     category_name = message.text.strip()
 
     if category_name == "Назад":
@@ -80,12 +118,29 @@ async def process_category(message: types.Message):
 
     products = get_products_by_category(category['id_category'])
 
-    if products:
-        text = "\n\n".join([f"{p['name']} — {p['price']}₽" for p in products])
-    else:
-        text = "В этой категории пока нет товаров."
+    if not products:
+        await message.answer("В этой категории пока нет товаров.")
+        return
 
-    await message.answer(text)
+    for product in products:
+        name = product['name']
+        description = product.get('descript', 'Описание отсутствует.')
+        price = product['price']
+        photo = product['photo']
+        photo_path = "resources/images/" + product['photo']
+        logging.info("Reading file: " + photo_path)
+
+
+        caption = f"<b>{name}</b>\n{description}\nЦена: {price}₽"
+
+        # Проверим наличие файла
+        if not os.path.exists(photo_path) or not photo:
+            await message.answer("<b>Странно, но фото нет...</b>\n\n" + caption, parse_mode="HTML")
+            continue
+
+        photo = FSInputFile(photo_path)
+
+        await message.answer_photo(photo=photo, caption=caption, parse_mode="HTML")
 
 
 async def process_add_to_cart(callback_query: types.CallbackQuery):
