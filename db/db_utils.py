@@ -84,7 +84,7 @@ def get_products_by_category(category_id):
     mydb = connect_to_db()
     if mydb:
         mycursor = mydb.cursor(dictionary=True)
-        sql = "SELECT id_product, name, price FROM product WHERE id_category = %s"
+        sql = "SELECT id_product, name, descript, price, photo FROM product WHERE id_category = %s"
         val = (category_id,)
         try:
             mycursor.execute(sql, val)
@@ -373,7 +373,7 @@ def get_admin_by_tg_id(tg_user_id):
     return None
 
 
-def register_admin(name, phone, tg_user_id, password):
+def register_admin(tg_user_id: int, password: str,name: str = None, phone: str = None):
     mydb = connect_to_db()
     if mydb:
         mycursor = mydb.cursor()
@@ -615,3 +615,39 @@ def get_product_details(product_id):
         finally:
             mycursor.close()
             mydb.close()
+
+def get_products_by_category_as_menu(category_id) -> dict | None:
+    mydb = connect_to_db()
+    if mydb:
+        mycursor = mydb.cursor(dictionary=True)
+        sql = "SELECT id_product, name FROM product WHERE id_category = %s"
+        val = (category_id,)
+        try:
+            mycursor.execute(sql, val)
+            products = mycursor.fetchall()
+            return products
+        except mysql.connector.Error as err:
+            logging.error(f"Ошибка получения продуктов: {err}")
+            return None
+        finally:
+            mycursor.close()
+            mydb.close()
+    return None
+
+def get_product_id_by_name(product_name):
+    mydb = connect_to_db()
+    if mydb:
+        mycursor = mydb.cursor(dictionary=True)
+        sql = "SELECT id_product FROM product WHERE name = %s"
+        val = (product_name,)
+        try:
+            mycursor.execute(sql, val)
+            product_id = mycursor.fetchone()
+            return product_id
+        except mysql.connector.Error as err:
+            logging.error(f"Ошибка получения ID продукта: {err}")
+            return None
+        finally:
+            mycursor.close()
+            mydb.close()
+    return None

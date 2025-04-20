@@ -1,18 +1,22 @@
-
+import logging
 
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 
-from db.db_utils import get_menu_categories, get_delivery_types
+from db.db_utils import get_menu_categories, get_delivery_types, get_products_by_category_as_menu
 
 
 # Навигационное меню
-def nav_keyboard():
-    keyboard = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2, keyboard=[
+def nav_keyboard(is_admin=False):
+    keyboard = ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text="Просмотр меню")],
         [KeyboardButton(text="История заказов")],
         [KeyboardButton(text="Статус заказа")],
         [KeyboardButton(text="Корзина")]
     ])
+
+    if is_admin:
+        keyboard.keyboard.append([KeyboardButton(text="Админ-панель")])
+
     return keyboard
 
 def categories_keyboard():
@@ -21,17 +25,41 @@ def categories_keyboard():
     if not categories:
         return None
 
-    keyboard = ReplyKeyboardMarkup(
-        resize_keyboard=True,
-        row_width=2,
-        keyboard=[
-            [KeyboardButton(text=name)]
-            for cat_id, name in categories
-        ]
-    )
+    # Разбиваем категории на 4 строки
+    row_width = 4
+    rows = [categories[i:i + row_width] for i in range(0, len(categories), row_width)]
 
+    # Создаем клавиатуру
+    keyboard = ReplyKeyboardMarkup(resize_keyboard=True, keyboard=[])
+
+    # Добавляем кнопки в строки
+    for row in rows:
+        keyboard.keyboard.append([KeyboardButton(text=name) for _, name in row])
+
+    # Добавляем кнопку "Назад"
     keyboard.keyboard.append([KeyboardButton(text="Назад")])
+
     return keyboard
+
+def get_deletion_keyboard(category_id):
+    products = get_products_by_category_as_menu(category_id)
+    logging.info(f"products: {products}")
+
+    # Количество кнопок в строке
+    row_width = 2
+    rows = [products[i:i + row_width] for i in range(0, len(products), row_width)]
+
+    keyboard = ReplyKeyboardMarkup(resize_keyboard=True, keyboard=[])
+
+    # Добавляем кнопки: по 2 в строку
+    for row in rows:
+        keyboard.keyboard.append([KeyboardButton(text=item["name"]) for item in row])
+
+    # Кнопка "Назад" — отдельной строкой
+    keyboard.keyboard.append([KeyboardButton(text="Назад")])
+
+    return keyboard
+
 
 def get_delivery_type_markup():
     delivery_types = get_delivery_types()  # Получаем все типы доставки
