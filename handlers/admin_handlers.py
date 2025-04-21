@@ -14,7 +14,6 @@ from keyboards.keyboards import admin_keyboard, categories_keyboard, get_deletio
 from states.states import Admin
 from utils.utils import is_admin
 
-
 async def admin_command(message: types.Message, state: FSMContext):
     admin = get_admin_by_tg_id(message.from_user.id)
 

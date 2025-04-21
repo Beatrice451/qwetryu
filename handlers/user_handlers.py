@@ -1,17 +1,20 @@
-import logging
+import os
 
 from aiogram import types, Dispatcher, F
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
+from aiogram.types import FSInputFile, InlineKeyboardMarkup
 
 from db.db_utils import get_user, register_user, get_category_by_name, get_products_by_category, get_order_history, \
     get_order_items, get_order_status, create_order, get_product_details, get_delivery_types, add_to_cart, \
     get_cart_items, remove_cart_item, update_cart_item_quantity, get_menu_categories
 from keyboards.keyboards import nav_keyboard, categories_keyboard, get_delivery_type_markup, \
-    delivery_time_keyboard, get_cart_item_markup
-from states.states import Registration, Order
+    delivery_time_keyboard, add_select_button, add_cancel_select_button, add_order_button
+from states.states import Registration, Order, Admin
+from utils.utils import is_admin
 
 category_names = [i[1] for i in get_menu_categories()]
+
 
 async def start_command(message: types.Message, state: FSMContext):
     user = get_user(message.from_user.id)
@@ -21,7 +24,7 @@ async def start_command(message: types.Message, state: FSMContext):
     else:
         await message.answer(
             "Привет! Похоже, вы впервые здесь. Пожалуйста, пройдите регистрацию, чтобы пользоваться ботом.",
-        reply_markup=types.ReplyKeyboardRemove())
+            reply_markup=types.ReplyKeyboardRemove())
         await state.set_state(Registration.waiting_for_name)
 
         await message.answer("Введите ваше имя:")
@@ -50,7 +53,7 @@ async def process_phone(message: types.Message, state: FSMContext):
 
 
 async def nav_command(message: types.Message):
-    await message.answer("Выберите действие:", reply_markup=nav_keyboard())
+    await message.answer("Выберите действие:", reply_markup=nav_keyboard(is_admin=is_admin(message.from_user.id)))
 
 
 async def profile_command(message: types.Message):
@@ -71,40 +74,11 @@ async def view_menu(message: types.Message):
         await message.answer("Пожалуйста, зарегистрируйтесь, чтобы просмотреть меню. Используйте /start.")
 
 
-# async def process_category(message: types.Message):
-#     user = get_user(message.from_user.id)
-#     if user:
-#         category_name = message.text.strip()
-#
-#         if category_name == "Назад":
-#             await message.answer("Вы вернулись в главное меню.")
-#             return
-#
-#         category = get_category_by_name(category_name)
-#         if category is None:
-#             await message.answer("Категория не найдена.")
-#             return
-#
-#         products = get_products_by_category(category['id_category'])
-#
-#         if products:
-#             text = "\n\n".join([f"{p['name']} — {p['price']}₽" for p in products])
-#         else:
-#             text = "В этой категории пока нет товаров."
-#
-#         await message.answer(text)
-#     else:
-#         await message.answer("Пожалуйста, зарегистрируйтесь, чтобы просмотреть меню. Используйте /start.")
-
-import os
-from aiogram.types import FSInputFile
-
 async def process_category(message: types.Message):
     user = get_user(message.from_user.id)
     if not user:
         await message.answer("Пожалуйста, зарегистрируйтесь, чтобы просмотреть меню. Используйте /start.")
         return
-
     category_name = message.text.strip()
 
     if category_name == "Назад":
@@ -128,29 +102,107 @@ async def process_category(message: types.Message):
         price = product['price']
         photo = product['photo']
         photo_path = "resources/images/" + product['photo']
-        logging.info("Reading file: " + photo_path)
 
-
-        caption = f"<b>{name}</b>\n{description}\nЦена: {price}₽"
+        caption = (
+            f"<b>{name}</b>\n"
+            f"{description}\n"
+            f"Цена: {price}₽"
+        )
 
         # Проверим наличие файла
         if not os.path.exists(photo_path) or not photo:
-            await message.answer("<b>Странно, но фото нет...</b>\n\n" + caption, parse_mode="HTML")
+            await message.answer(
+                "<b>Странно, но фото нет...</b>\n\n" +
+                caption,
+                parse_mode="HTML",
+                reply_markup=add_select_button(product['id_product'])
+            )
             continue
 
         photo = FSInputFile(photo_path)
 
-        await message.answer_photo(photo=photo, caption=caption, parse_mode="HTML")
+        await message.answer_photo(photo=photo, caption=caption, parse_mode="HTML",
+                                   reply_markup=add_select_button(product['id_product']))
 
 
-async def process_add_to_cart(callback_query: types.CallbackQuery):
-    product_id = callback_query.data.split(':')[1]
-    quantity = 1
+async def process_select_product(callback_query: types.CallbackQuery, state: FSMContext):
+    product_id = callback_query.data.split('_')[1]
+    await state.set_state(Order.waiting_for_quantity)
 
-    if add_to_cart(callback_query.from_user.id, product_id, quantity):
-        await callback_query.answer("Товар добавлен в корзину!", show_alert=True)
+    msg = await callback_query.message.answer("Выберите количество:", reply_markup=types.ReplyKeyboardRemove())
+    await state.update_data(
+        product_id=product_id,
+        message_id=msg.message_id,
+        inline_msg=callback_query.message.message_id
+    )
+
+    await callback_query.message.edit_reply_markup(
+        reply_markup=add_cancel_select_button()
+    )
+
+
+async def process_cancel_select(callback_query: types.CallbackQuery, state: FSMContext):
+    await callback_query.answer("Выбор отменен.")
+
+    data = await state.get_data()
+    msg_id = data.get('message_id')
+    await callback_query.message.edit_reply_markup(
+        reply_markup=add_select_button(data.get('product_id'))
+    )
+
+    if msg_id:
+        try:
+            await callback_query.bot.delete_message(
+                chat_id=callback_query.message.chat.id,
+                message_id=msg_id
+            )
+        except Exception:
+            pass
+
+    await state.clear()
+
+
+async def process_quantity(message: types.Message, state: FSMContext):
+    msg = message.text
+    if not msg.isdigit() or int(msg) <= 0:
+        await message.answer("Пожалуйста, введите корректное количество!")
+        return
+    quantity = int(msg)
+
+    data = await state.get_data()
+    product_id = data.get('product_id')
+
+    if quantity <= 0:
+        await message.answer("Количество товара должно быть больше 0.")
+        return
+
+    msg_id = data.get('message_id')
+    if msg_id:
+        try:
+            await message.bot.delete_message(chat_id=message.chat.id, message_id=msg_id)
+        except Exception:
+            pass
+
+    try:
+        await message.bot.delete_message(chat_id=message.chat.id, message_id=message.message_id)
+    except Exception:
+        pass
+
+    if add_to_cart(message.from_user.id, product_id, quantity):
+        # бот импортируется посреди кода, потому что иначе начнётся циклический импорт и всё упадёт
+        from main import bot
+        inline_id = data.get('inline_msg')
+        await bot.edit_message_reply_markup(
+            chat_id=message.chat.id,
+            message_id=inline_id,
+            reply_markup=add_select_button(product_id)
+        )
+        await state.clear()
+        await message.answer("Товар добавлен в корзину!\n Количество: " + str(quantity),
+                             reply_markup=categories_keyboard())
     else:
-        await callback_query.answer("Не удалось добавить товар в корзину.", show_alert=True)
+        await state.clear()
+        await message.answer("Не удалось добавить товар в корзину.")
 
 
 async def view_order_history(message: types.Message):
@@ -173,14 +225,14 @@ async def view_order_history(message: types.Message):
                     items_text += f"- Product ID: {item['id_product']} x {item['quantity']} (Цена неизвестна)\n"
 
             text += f"""
-Заказ №{order['id_orders']}
-Дата: {order['date']}
-Состав заказа:
-{items_text}
-Сумма: {order['summa']} руб.
-Тип доставки: {order['delivery_type']}
-------------------------
-"""
+                        Заказ №{order['id_orders']}
+                        Дата: {order['date']}
+                        Состав заказа:
+                        {items_text}
+                        Сумма: {order['summa']} руб.
+                        Тип доставки: {order['delivery_type']}
+                        ------------------------
+                        """
         await message.answer(text)
     else:
         await message.answer("У вас пока нет заказов.")
@@ -208,18 +260,7 @@ async def view_cart(message: types.Message):
             total_amount += item['product_price'] * item['quantity']
 
         cart_text += f"\nОбщая сумма: {total_amount} руб."
-        await message.answer(cart_text)
-
-        for item in cart_items:
-            markup = get_cart_item_markup(item['id_basket'])
-            await message.answer(f"Действия для: {item['product_name']}", reply_markup=markup)
-
-        checkout_kb = types.InlineKeyboardMarkup()
-        checkout_kb.add(types.InlineKeyboardButton(text="Оформить заказ", callback_data="checkout"))
-        await message.answer("Что вы хотите сделать?", reply_markup=checkout_kb)
-    else:
-        await message.answer("Ваша корзина пуста.")
-
+        await message.answer(cart_text, reply_markup=add_order_button(tg_user_id))
 
 async def update_quantity_callback(callback_query: types.CallbackQuery, state: FSMContext):
     cart_item_id = callback_query.data.split(':')[1]
@@ -259,15 +300,15 @@ async def remove_from_cart_callback(callback_query: types.CallbackQuery):
     await view_cart(callback_query.message)
 
 
-async def process_checkout(callback_query: types.CallbackQuery):
+async def process_checkout(callback_query: types.CallbackQuery, state: FSMContext):
     tg_user_id = callback_query.from_user.id
     cart_items = get_cart_items(tg_user_id)
 
     if not cart_items:
-        await callback_query.answer("Ваша корзина пуста! Нечего оформлять.", show_alert=True)
+        await callback_query.answer("Ваша корзина пуста! Нечего оформлять.")
         return
 
-    await Order.choosing_delivery_type.set()
+    await state.set_state(Order.choosing_delivery_type)
     await callback_query.message.answer("Выберите тип доставки:", reply_markup=get_delivery_type_markup())
     await callback_query.answer()
 
@@ -347,8 +388,8 @@ def register_user_handlers(dp: Dispatcher):
     dp.message.register(process_phone, StateFilter(Registration.waiting_for_phone))
 
     dp.message.register(view_menu, F.text == "Просмотр меню")
-    dp.message.register(process_category, lambda msg: msg.text in category_names)
-    dp.callback_query.register(process_add_to_cart, F.data.startswith("add_to_cart:"))
+    dp.message.register(process_category, lambda msg: msg.text in category_names,
+                        ~StateFilter(Admin.adding_product_category), ~StateFilter(Admin.deleting_product_category))
 
     dp.message.register(view_order_history, F.text == "История заказов")
     dp.message.register(view_order_status, F.text == "Статус заказа")
@@ -359,4 +400,11 @@ def register_user_handlers(dp: Dispatcher):
     dp.callback_query.register(remove_from_cart_callback, F.data.startswith("remove_from_cart:"))
 
     dp.callback_query.register(process_checkout, F.data == "checkout")
-    dp.message.register(nav_command, F.text == "Назад")
+    dp.message.register(nav_command, F.text == "Назад", ~StateFilter(Admin.adding_product_category))
+
+    dp.callback_query.register(process_select_product, F.data.startswith("order_"))
+    dp.callback_query.register(process_cancel_select, F.data == "cancel_select",
+                               StateFilter(Order.waiting_for_quantity))
+    dp.message.register(process_quantity, StateFilter(Order.waiting_for_quantity))
+
+    dp.callback_query.register(process_checkout, F.data.startswith("process_order_"))

@@ -67,7 +67,7 @@ def get_delivery_type_markup():
         keyboard = InlineKeyboardMarkup(
             row_width=2,
             inline_keyboard=[
-                [InlineKeyboardButton(text=delivery_type['delivery_type'], callback_data=f"delivery_type:{delivery_type['id_type']}")]
+                [InlineKeyboardButton(text=delivery_types['delivery_type'], callback_data=f"delivery_type_{delivery_types['id_type']}")]
                 for delivery_type in (delivery_types,
                                       [InlineKeyboardButton(text="Назад", callback_data="nav_menu()")])
             ]
@@ -98,10 +98,10 @@ def admin_keyboard() -> ReplyKeyboardMarkup:
         input_field_placeholder="Выберите действие"
     )
 
-def product_delete_keyboard(product_id):
-    keyboard = InlineKeyboardMarkup()
-    keyboard.add(InlineKeyboardButton("Удалить", callback_data=f"delete_product:{product_id}"))
-    return keyboard
+# def product_delete_keyboard(product_id):
+#     keyboard = InlineKeyboardMarkup()
+#     keyboard.add(InlineKeyboardButton("Удалить", callback_data=f"delete_product:{product_id}"))
+#     return keyboard
 
 def get_product_inline_markup(products):
     keyboard = InlineKeyboardMarkup(row_width=2)
@@ -109,8 +109,29 @@ def get_product_inline_markup(products):
         keyboard.add(InlineKeyboardButton(text=f"Добавить {product['name']} в корзину", callback_data=f"add_to_cart:{product['id_product']}"))
     return keyboard
 
-def get_cart_item_markup(cart_item_id):
-   markup = InlineKeyboardMarkup()
-   markup.add(InlineKeyboardButton("Изменить количество", callback_data=f"update_quantity:{cart_item_id}"))
-   markup.add(InlineKeyboardButton("Удалить из корзины", callback_data=f"remove_from_cart:{cart_item_id}"))
-   return markup
+# def get_cart_item_markup(cart_item_id):
+#    markup = InlineKeyboardMarkup()
+#    markup.add(InlineKeyboardButton("Изменить количество", callback_data=f"update_quantity:{cart_item_id}"))
+#    markup.add(InlineKeyboardButton("Удалить из корзины", callback_data=f"remove_from_cart:{cart_item_id}"))
+#    return markup
+
+def add_select_button(product_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🛒 ПОМЕНЯТЬ ТУТ БУКАВЫ", callback_data=f"order_{product_id}")]
+        ]
+    )
+
+def add_cancel_select_button() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отменить", callback_data="cancel_select")]
+        ]
+    )
+
+def add_order_button(order_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Оформить заказ", callback_data=f"process_order_{order_id}")]
+        ]
+    )
