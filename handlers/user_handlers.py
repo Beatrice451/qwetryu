@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 
 from aiogram import types, Dispatcher, F
 from aiogram.filters import Command, StateFilter
@@ -6,12 +7,13 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import FSInputFile, InlineKeyboardMarkup
 
 from db.db_utils import get_user, register_user, get_category_by_name, get_products_by_category, get_order_history, \
-    get_order_items, get_order_status, create_order, get_product_details, get_delivery_types, add_to_cart, \
+    get_order_items, get_order_status, update_order, get_product_details, get_delivery_types, add_to_cart, \
     get_cart_items, remove_cart_item, update_cart_item_quantity, get_menu_categories
 from keyboards.keyboards import nav_keyboard, categories_keyboard, get_delivery_type_markup, \
-    delivery_time_keyboard, add_select_button, add_cancel_select_button, add_order_button
+    delivery_time_keyboard, add_select_button, add_cancel_select_button, add_order_button, \
+    add_accept_data_processing_button
 from states.states import Registration, Order, Admin
-from utils.utils import is_admin
+from utils.utils import is_admin, delete_saved_messages
 
 category_names = [i[1] for i in get_menu_categories()]
 
@@ -104,9 +106,9 @@ async def process_category(message: types.Message):
         photo_path = "resources/images/" + product['photo']
 
         caption = (
-            f"<b>{name}</b>\n"
-            f"{description}\n"
-            f"Цена: {price}₽"
+            f"<b>Название:</b> {name}\n\n"
+            f"<b>Описание:</b> {description}\n\n"
+            f"<b>Цена:</b> {price}₽"
         )
 
         # Проверим наличие файла
@@ -158,6 +160,7 @@ async def process_cancel_select(callback_query: types.CallbackQuery, state: FSMC
             )
         except Exception:
             pass
+        await delete_saved_messages(callback_query.bot, callback_query.message.chat.id, state)
 
     await state.clear()
 
@@ -188,15 +191,15 @@ async def process_quantity(message: types.Message, state: FSMContext):
     except Exception:
         pass
 
+    from main import bot
+    inline_id = data.get('inline_msg')
+    await bot.edit_message_reply_markup(
+        chat_id=message.chat.id,
+        message_id=inline_id,
+        reply_markup=add_select_button(product_id)
+    )
     if add_to_cart(message.from_user.id, product_id, quantity):
         # бот импортируется посреди кода, потому что иначе начнётся циклический импорт и всё упадёт
-        from main import bot
-        inline_id = data.get('inline_msg')
-        await bot.edit_message_reply_markup(
-            chat_id=message.chat.id,
-            message_id=inline_id,
-            reply_markup=add_select_button(product_id)
-        )
         await state.clear()
         await message.answer("Товар добавлен в корзину!\n Количество: " + str(quantity),
                              reply_markup=categories_keyboard())
@@ -225,14 +228,14 @@ async def view_order_history(message: types.Message):
                     items_text += f"- Product ID: {item['id_product']} x {item['quantity']} (Цена неизвестна)\n"
 
             text += f"""
-                        Заказ №{order['id_orders']}
-                        Дата: {order['date']}
-                        Состав заказа:
-                        {items_text}
-                        Сумма: {order['summa']} руб.
-                        Тип доставки: {order['delivery_type']}
-                        ------------------------
-                        """
+Заказ №{order['id_orders']}
+Дата: {order['deliv_date']}
+Состав заказа:
+{items_text}
+Сумма: {order['summa']} руб.
+Тип доставки: {order['name']}
+------------------------
+"""
         await message.answer(text)
     else:
         await message.answer("У вас пока нет заказов.")
@@ -240,15 +243,16 @@ async def view_order_history(message: types.Message):
 
 async def view_order_status(message: types.Message):
     tg_user_id = message.from_user.id
-    status = get_order_status(tg_user_id)
-
-    if status:
-        await message.answer(f"Статус вашего заказа: {status}")
+    order_info = get_order_status(tg_user_id)
+    if order_info:
+        status, deliv_dt = order_info
+        formatted_date = deliv_dt.strftime("%d/%m/%Y %H:%M")
+        await message.answer(f"Статус вашего последнего заказа: {status}\nДата оформления: {formatted_date}")
     else:
-        await message.answer("Нет активных заказов.")
+        await message.answer("У вас пока нет заказов.")
 
 
-async def view_cart(message: types.Message):
+async def view_cart(message: types.Message, state: FSMContext):
     tg_user_id = message.from_user.id
     cart_items = get_cart_items(tg_user_id)
 
@@ -260,7 +264,20 @@ async def view_cart(message: types.Message):
             total_amount += item['product_price'] * item['quantity']
 
         cart_text += f"\nОбщая сумма: {total_amount} руб."
-        await message.answer(cart_text, reply_markup=add_order_button(tg_user_id))
+        msg = await message.answer(cart_text, reply_markup=add_order_button(tg_user_id))
+        data = await state.get_data()
+        messages_for_deleting = data.get('messages_for_deleting', [])
+        messages_for_deleting.append(message.message_id)
+        await state.update_data(
+            msg_id=message.message_id,
+            cart_text=cart_text,
+            messages_for_deleting=messages_for_deleting
+        )
+        print("added cart for deletion: ", msg.message_id)
+        print(messages_for_deleting)
+    else:
+        await message.answer("Ваша корзина пуста.")
+
 
 async def update_quantity_callback(callback_query: types.CallbackQuery, state: FSMContext):
     cart_item_id = callback_query.data.split(':')[1]
@@ -290,6 +307,16 @@ async def process_new_quantity(message: types.Message, state: FSMContext):
         await message.answer("Неверный формат количества. Введите целое число.")
 
 
+async def back_to_cart(callback_query: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    cart_text = data.get('cart_text')
+    await callback_query.message.edit_text(
+        text=cart_text,
+        reply_markup=add_order_button(callback_query.from_user.id)
+    )
+
+
+# TODO Implement
 async def remove_from_cart_callback(callback_query: types.CallbackQuery):
     cart_item_id = callback_query.data.split(':')[1]
     if remove_cart_item(cart_item_id):
@@ -307,25 +334,38 @@ async def process_checkout(callback_query: types.CallbackQuery, state: FSMContex
     if not cart_items:
         await callback_query.answer("Ваша корзина пуста! Нечего оформлять.")
         return
-
+    data = await state.get_data()
+    cart_text = data['cart_text']
     await state.set_state(Order.choosing_delivery_type)
-    await callback_query.message.answer("Выберите тип доставки:", reply_markup=get_delivery_type_markup())
+    await callback_query.message.edit_text(
+        text=f"{cart_text}\n\nВыберите тип доставки:",
+        reply_markup=get_delivery_type_markup()
+    )
     await callback_query.answer()
 
 
 async def process_delivery_type(callback_query: types.CallbackQuery, state: FSMContext):
-    delivery_type_id = callback_query.data.split(':')[1]
+    data = await state.get_data()
+    messages_for_deletion = data.get("messages_for_deletion", [])
+    delivery_type_id = callback_query.data.split('_')[-1]
     await state.update_data(delivery_type_id=delivery_type_id)
     delivery_type_info = get_delivery_types()
     delivery_info = next((item for item in delivery_type_info if item['id_type'] == int(delivery_type_id)), None)
     if delivery_info:
-        await state.update_data(delivery_type=delivery_info['delivery_type'])
-        if delivery_info['delivery_type'] == "Доставка":
-            await Order.waiting_for_address.set()
-            await callback_query.message.answer("Пожалуйста, отправьте адрес доставки:")
-        elif delivery_info['delivery_type'] == "Самовывоз":
-            await Order.choosing_delivery_time.set()
-            await callback_query.message.answer("Выберите время самовывоза:", reply_markup=delivery_time_keyboard())
+        await state.update_data(delivery_type=delivery_info['name'])
+        if delivery_info['name'] == "Доставка":
+            await state.set_state(Order.waiting_for_address)
+            msg = await callback_query.message.answer("Пожалуйста, отправьте адрес доставки:")
+            messages_for_deletion.append(msg.message_id)
+            await state.update_data(
+                messages_for_deletion=messages_for_deletion
+            )
+        elif delivery_info['name'] == "Самовывоз":
+            await state.set_state(Order.choosing_delivery_time)
+            new_msg = await callback_query.message.answer("Выберите время самовывоза:", reply_markup=delivery_time_keyboard())
+            messages_for_deletion.append(new_msg.message_id)
+            await state.update_data(messages_for_deletion=messages_for_deletion)
+            print("samovsvoz added for deletion: ", new_msg.message_id)
     else:
         await callback_query.answer("Ошибка получения информации о доставке.")
 
@@ -334,49 +374,90 @@ async def process_delivery_type(callback_query: types.CallbackQuery, state: FSMC
 
 async def process_address(message: types.Message, state: FSMContext):
     await state.update_data(delivery_address=message.text)
-    await Order.choosing_delivery_time.set()
-    await message.answer("Выберите время доставки:", reply_markup=delivery_time_keyboard())
+    await state.set_state(Order.choosing_delivery_time)
+    msg = await message.answer("Выберите время доставки:", reply_markup=delivery_time_keyboard())
+    data = await state.get_data()
+    address_msg = message.message_id
+    messages_for_deletion = data.get("messages_for_deletion", [])
+    messages_for_deletion.append(msg.message_id)
+    messages_for_deletion.append(address_msg)
+    await state.update_data(messages_for_deletion=messages_for_deletion)
 
 
 async def process_delivery_time(callback_query: types.CallbackQuery, state: FSMContext):
-    delivery_time = callback_query.data.split(':')[1]
-    await state.update_data(delivery_time=delivery_time)
-    await Order.accepting_data_processing.set()
-    await callback_query.message.answer(
-        "Для завершения оформления заказа необходимо согласие на обработку персональных данных.")
-    await callback_query.message.answer("Подтвердите свое согласие, отправив '+'.")
+    delivery_time_choice = callback_query.data.split('_')[-1]
+    data = await state.get_data()
+    messages_for_deletion = data.get("messages_for_deletion", [])
+
+    if delivery_time_choice.lower() == "asap":
+        await state.update_data(delivery_time="ASAP")
+        await state.set_state(Order.accepting_data_processing)
+        msg = await callback_query.message.answer(
+            "Для завершения оформления заказа необходимо согласие на обработку персональных данных.",
+            reply_markup=add_accept_data_processing_button()
+        )
+        messages_for_deletion.append(msg.message_id)
+        await state.update_data(messages_for_deletion=messages_for_deletion)
+    elif delivery_time_choice == "scheduled":
+        await state.set_state(Order.entering_custom_time)
+        msg = await callback_query.message.answer("Введите желаемое время доставки в формате ЧЧ:ММ (например, 14:30):")
+        messages_for_deletion.append(msg.message_id)
+        await state.update_data(messages_for_deletion=messages_for_deletion)
+
+
     await callback_query.answer()
 
 
-async def process_data_processing(message: types.Message, state: FSMContext):
+async def process_data_processing(callback_query: types.CallbackQuery, state: FSMContext):
     await state.update_data(data_processing_accepted=True)
 
     data = await state.get_data()
     delivery_type_id = data.get('delivery_type_id')
     delivery_address = data.get('delivery_address', "")
     delivery_time = data['delivery_time']
-    tg_user_id = message.from_user.id
+    tg_user_id = callback_query.from_user.id
 
     cart_items = get_cart_items(tg_user_id)
 
     if not cart_items:
-        await message.answer("Ваша корзина пуста.")
+        await callback_query.message.answer("Ваша корзина пуста.")
         await state.clear()
         return
 
     total_amount = sum(item['product_price'] * item['quantity'] for item in cart_items)
 
     product_ids_quantities = {item['id_product']: item['quantity'] for item in cart_items}
-    order_id = create_order(tg_user_id, delivery_type_id, delivery_address, delivery_time, total_amount,
+    order_id = update_order(tg_user_id, delivery_type_id, delivery_address, delivery_time, total_amount,
                             product_ids_quantities)
 
     if order_id:
-        await message.answer(f"Заказ успешно оформлен! Номер вашего заказа: {order_id}")
-
+        # Состав заказа
+        order_details = "\n".join(
+            [f"{item['product_name']} (x{item['quantity']}) - {item['product_price']} руб." for item in cart_items]
+        )
+        # Добавляем состав заказа в сообщение
+        success_message = f"Заказ успешно оформлен! Номер вашего заказа: {order_id}\n\nСостав заказа:\n{order_details}"
+        await callback_query.message.answer(success_message)
     else:
-        await message.answer("Произошла ошибка при оформлении заказа. Пожалуйста, попробуйте еще раз.")
+        await callback_query.message.answer("Произошла ошибка при оформлении заказа. Пожалуйста, попробуйте еще раз.")
 
+    print("messages for deletion:", data.get("messages_for_deletion"))
+    await delete_saved_messages(callback_query.bot, callback_query.message.chat.id, state)
     await state.clear()
+
+
+async def process_custom_time(message: types.Message, state: FSMContext):
+    user_input = message.text.strip()
+    try:
+        delivery_time = datetime.strptime(user_input, "%H:%M").strftime("%H:%M")
+        await state.update_data(delivery_time=delivery_time)
+        await state.set_state(Order.accepting_data_processing)
+        await message.answer(
+            "Для завершения оформления заказа необходимо согласие на обработку персональных данных.",
+            reply_markup=add_accept_data_processing_button()
+        )
+    except ValueError:
+        await message.answer("Пожалуйста, введите время в правильном формате: ЧЧ:ММ (например, 18:45).")
 
 
 def register_user_handlers(dp: Dispatcher):
@@ -408,3 +489,9 @@ def register_user_handlers(dp: Dispatcher):
     dp.message.register(process_quantity, StateFilter(Order.waiting_for_quantity))
 
     dp.callback_query.register(process_checkout, F.data.startswith("process_order_"))
+    dp.callback_query.register(back_to_cart, F.data == "back_to_cart")
+    dp.callback_query.register(process_delivery_type, F.data.startswith("delivery_type_"))
+    dp.message.register(process_address, StateFilter(Order.waiting_for_address))
+    dp.callback_query.register(process_delivery_time, F.data.startswith("delivery_time_"))
+    dp.callback_query.register(process_data_processing, F.data == "accept_data_processing")
+    dp.message.register(process_custom_time, StateFilter(Order.entering_custom_time))
