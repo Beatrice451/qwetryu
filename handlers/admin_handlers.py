@@ -1,5 +1,6 @@
 import logging
 import os
+from datetime import datetime
 
 from aiogram import types, Dispatcher, F
 from aiogram.filters import Command, StateFilter
@@ -9,10 +10,11 @@ from aiogram.types import ContentType, ReplyKeyboardRemove
 
 from db.db_utils import get_admin_by_tg_id, register_admin, delete_product, add_product, verify_admin_password, \
     has_any_admins, get_category_by_name, \
-    get_products_by_category_as_menu, get_product_id_by_name
-from keyboards.keyboards import admin_keyboard, categories_keyboard, get_deletion_keyboard
+    get_products_by_category_as_menu, get_product_id_by_name, get_todays_orders, update_order_status, get_order_items
+from keyboards.keyboards import admin_keyboard, categories_keyboard, get_deletion_keyboard, status_keyboard
 from states.states import Admin
-from utils.utils import is_admin
+from utils.utils import is_admin, delete_saved_messages
+
 
 async def admin_command(message: types.Message, state: FSMContext):
     admin = get_admin_by_tg_id(message.from_user.id)
@@ -52,6 +54,7 @@ async def process_admin_registration_password(message: types.Message, state: FSM
         await message.answer("Введите ваше имя:")
         await state.set_state(Admin.waiting_for_name)
 
+
 async def process_admin_password(message: types.Message, state: FSMContext):
     if verify_admin_password(message.from_user.id, message.text):
         logging.info(f"Пользователь {message.from_user.id} вошел в админ-панель")
@@ -85,6 +88,49 @@ async def process_admin_phone(message: types.Message, state: FSMContext):
         await message.answer("Произошла ошибка при регистрации администратора. Попробуйте позже.")
         await state.clear()
 
+
+async def set_order_status_start(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    messages_for_deletion = data.get("messages_for_deletion", [])
+    if not is_admin(message.from_user.id):
+        await message.answer("У вас нет прав доступа.")
+        return
+    await state.set_state(Admin.waiting_for_order_id)
+    msg = await message.answer("Введите ID заказа:", reply_markup=ReplyKeyboardRemove())
+    messages_for_deletion.append(msg.message_id)
+    await state.update_data(messages_for_deletion=messages_for_deletion)
+
+
+# TODO create method to get order info by id
+async def process_set_order_status_id_entered(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    messages_for_deletion = data.get("messages_for_deletion", [])
+    messages_for_deletion.append(message.message_id)
+
+    try:
+        order_id = int(message.text)
+    except ValueError:
+        await message.answer("Неверный формат ID заказа. Введите число.")
+        return
+    await state.set_state(Admin.waiting_for_order_status)
+    await state.update_data(user_msg=message, messages_for_deletion=messages_for_deletion)
+    await message.answer("Укажите новый статус заказа:", reply_markup=status_keyboard(order_id))
+
+async def process_update_order_status(callback_query: types.CallbackQuery, state: FSMContext):
+    _, _, order_id, status = callback_query.data.split("_")
+    order_id = int(order_id)
+    status = str(status)
+    data = await state.get_data()
+    updated = update_order_status(order_id, status)
+    if updated:
+        await callback_query.message.edit_text(f"Статус заказа №{order_id} обновлён на: {status}")
+        await admin_command(data.get('user_msg'), state)
+        await delete_saved_messages(callback_query.bot, callback_query.message.chat.id, state)
+    else:
+        await callback_query.answer("Не удалось обновить статус.", show_alert=True)
+
+    await state.clear()
+    await callback_query.answer()
 
 async def add_product_start(message: types.Message, state: FSMContext):
     if not is_admin(message.from_user.id):
@@ -170,7 +216,7 @@ async def add_product_image_entered(message: types.Message, state: FSMContext):
 
     # 7. Сохраняем в БД
     if add_product(category_id, product_name, product_description, product_price, product_image):
-        await message.answer("Товар успешно добавлен!")
+        await message.answer("Товар успешно добавлен!", reply_markup=admin_keyboard())
     else:
         await message.answer("Произошла ошибка при добавлении товара.")
 
@@ -210,6 +256,47 @@ async def delete_product_confirmation(message: types.Message, state: FSMContext)
         await message.answer("Ошибка при удалении товара.")
 
 
+async def view_orders(message: types.Message, state: FSMContext):
+    orders = get_todays_orders()
+    if orders:
+        order_details = ""
+        for order in orders:
+            order_items = get_order_items(order['id_orders'])
+            delivery_time = (datetime.min + order['delivery_time']).time()
+            deliv_time = (
+                delivery_time.strftime('%H:%M') if delivery_time.strftime('%H:%M') != order[
+                    'deliv_date'].time().strftime('%H:%M')
+                else "Как можно скорее"
+            )
+
+            # Форматируем состав заказа
+            items_text = ""
+            for item in order_items:
+                items_text += f"  • {item['name']} × {item['quantity']} = {item['price_to_quan']}₽\n"
+
+            order_details += (
+                f"📦 ID Заказа: {order['id_orders']}\n"
+                f"🔄 Статус: {order['status']}\n"
+                f"📅 Дата оформления: {order['deliv_date'].strftime('%d.%m.%Y %H:%M')}\n"
+                f"🚚 Тип доставки: {order['delivery_type']}\n"
+                f"💳 Сумма: {order['summa']}₽\n"
+                f"📱 Телефон: {order['phone']}\n"
+                f"👤 Имя пользователя: {order['name']}\n"
+                f"⏱ Время готовности: {deliv_time}\n"
+                f"🏠 Адрес доставки: {order['adress'] if order['adress'] else '—'}\n\n"
+                f"🛒 Состав заказа:\n{items_text}\n"
+                "___________________________\n\n"
+            )
+
+        # Разбиваем сообщение, если оно слишком длинное
+        if len(order_details) > 4000:
+            for chunk in [order_details[i:i + 4000] for i in range(0, len(order_details), 4000)]:
+                await message.answer(chunk)
+        else:
+            await message.answer(f"📊 Заказы за сегодня:\n\n{order_details}")
+    else:
+        await message.answer("ℹ️ Заказы за сегодняшний день не найдены.")
+
 def register_admin_handlers(dp: Dispatcher):
     # Команды управления админ-панелью
     dp.message.register(admin_command, F.text == "Админ-панель")
@@ -246,3 +333,7 @@ def register_admin_handlers(dp: Dispatcher):
     dp.message.register(delete_product_start, F.text == "Удалить товар", StateFilter(any_state))
     dp.message.register(delete_product_category_chosen, StateFilter(Admin.deleting_product_category))
     dp.message.register(delete_product_confirmation, StateFilter(Admin.deleting_product_confirmation))
+    dp.message.register(view_orders, F.text == "Посмотреть заказы")
+    dp.message.register(set_order_status_start, F.text == "Изменить статус заказа")
+    dp.message.register(process_set_order_status_id_entered, StateFilter(Admin.waiting_for_order_id))
+    dp.callback_query.register(process_update_order_status, F.data.startswith("update_status_"))

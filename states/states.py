@@ -12,6 +12,9 @@ class Order(StatesGroup):
     choosing_delivery_time = State()
     accepting_data_processing = State()
     waiting_for_quantity = State()
+    entering_custom_time = State()
+    editing_cart = State()
+    waiting_for_new_quantity = State()
 
 
 # Состояния для админ панели
@@ -27,3 +30,5 @@ class Admin(StatesGroup):
     waiting_for_name = State()
     waiting_for_phone = State()
     registering_password = State()
+    waiting_for_order_status = State()
+    waiting_for_order_id = State()

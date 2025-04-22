@@ -1,14 +1,12 @@
 import logging
+from datetime import datetime
 
 import bcrypt  # Для хеширования паролей
 import mysql.connector
 
 from config import DB_HOST, DB_USER, DB_PASSWORD, DB_NAME
-from cachetools import TTLCache, cached
 
 logging.basicConfig(level=logging.INFO)
-
-cache = TTLCache(maxsize=100, ttl=30)
 
 
 def connect_to_db():
@@ -82,7 +80,7 @@ def get_menu_categories():
             mydb.close()
     return None
 
-@cached(cache)
+
 def get_products_by_category(category_id):
     mydb = connect_to_db()
     if mydb:
@@ -109,9 +107,9 @@ def get_order_history(tg_user_id):
         sql = """
             SELECT
                 o.id_orders,
-                o.date,
+                o.deliv_date,
                 o.summa,
-                dt.delivery_type,
+                dt.name,
                 o.delivery_time,
                 o.status,
                 u.phone
@@ -123,8 +121,10 @@ def get_order_history(tg_user_id):
                 delivtype dt ON o.id_type = dt.id_type
             WHERE
                 u.tg_user_id = %s
+                AND o.deliv_date >= CURDATE() - INTERVAL 2 DAY
             ORDER BY
-                o.date DESC;
+                o.deliv_date DESC
+            LIMIT 10;
         """
         val = (tg_user_id,)
         try:
@@ -195,10 +195,11 @@ def get_order_status(tg_user_id):
     if mydb:
         mycursor = mydb.cursor()
         sql = """
-            SELECT status
+            SELECT status, deliv_date
             FROM orders
             WHERE id_user = (SELECT id_user FROM user WHERE tg_user_id = %s)
-            ORDER BY date DESC
+            AND status != 'Корзина'
+            ORDER BY deliv_date DESC
             LIMIT 1;
         """
         val = (tg_user_id,)
@@ -218,7 +219,30 @@ def get_order_status(tg_user_id):
     return None
 
 
-def create_order(tg_user_id, delivery_type_id, delivery_address, delivery_time, order_total, cart_items):
+def get_delivery_price(delivery_type_id):
+    mydb = connect_to_db()
+    if mydb:
+        mycursor = mydb.cursor()
+        sql = "SELECT price_dost FROM delivtype WHERE id_type = %s"
+        val = (delivery_type_id,)
+        try:
+            mycursor.execute(sql, val)
+            result = mycursor.fetchone()
+            if result:
+                return result[0]
+            else:
+                return None
+        except mysql.connector.Error as err:
+            logging.error(f"Ошибка получения стоимости доставки: {err}")
+            return None
+        finally:
+            mycursor.close()
+            mydb.close()
+    return None
+
+
+# TODO implement delivery_time
+def update_order(tg_user_id, delivery_type_id, delivery_address, delivery_time, order_total, cart_items):
     mydb = connect_to_db()
     if mydb:
         mycursor = mydb.cursor()
@@ -230,14 +254,44 @@ def create_order(tg_user_id, delivery_type_id, delivery_address, delivery_time, 
                 logging.error(f"Пользователь с tg_user_id {tg_user_id} не найден.")
                 return None
             id_user = user_id_result[0]
-            sql = """
-                INSERT INTO orders (id_user, date, summa, id_type, delivery_address, delivery_time, status)
-                VALUES (%s, NOW(), %s, %s, %s, %s, 'Оформлен');
+
+            # Получаем ID заказа в статусе "корзина"
+            sql_get_order = "SELECT id_orders FROM orders WHERE id_user = %s AND status = 'корзина'"
+            mycursor.execute(sql_get_order, (id_user,))
+            order_result = mycursor.fetchone()
+            if not order_result:
+                logging.error(f"Заказ в статусе 'корзина' не найден для пользователя {tg_user_id}.")
+                return None
+            order_id = order_result[0]
+            # delivery_price_result = (get_delivery_price(delivery_type_id),)
+            # if delivery_type_id == 2 and order_total > 1000:
+            #     delivery_price_result = (0,)
+            # else:
+            #     order_total += delivery_price_result[0]
+            if delivery_time == "ASAP":
+                delivery_time = datetime.now()
+
+            # Обновляем заказ
+            sql_update_order = """
+                UPDATE orders
+                SET deliv_date = NOW(),
+                    summa = %s,
+                    id_type = %s,
+                    adress = %s,
+                    delivery_time = %s,
+                    status = 'Оформлен'
+                WHERE id_orders = %s
             """
-            val = (id_user, order_total, delivery_type_id, delivery_address, delivery_time)
-            mycursor.execute(sql, val)
-            order_id = mycursor.lastrowid
+            mycursor.execute(sql_update_order,
+                             (order_total, delivery_type_id, delivery_address,
+                              delivery_time,
+                              order_id)
+                             )
             mydb.commit()
+            # Очищаем старые товары
+            mycursor.execute("DELETE FROM basket WHERE id_orders = %s", (order_id,))
+
+            # Добавляем новые товары
             for product_id, quantity in cart_items.items():
                 product_details = get_product_details(product_id)
                 if product_details:
@@ -245,11 +299,18 @@ def create_order(tg_user_id, delivery_type_id, delivery_address, delivery_time, 
                     sql_item = "INSERT INTO basket (id_orders, id_product, quantity, price_to_quan) VALUES (%s, %s, %s, %s)"
                     val_item = (order_id, product_id, quantity, price_to_quan)
                     mycursor.execute(sql_item, val_item)
+
             mydb.commit()
-            logging.info(f"Новый заказ (ID: {order_id}) успешно создан для пользователя {tg_user_id}.")
+            logging.info(f"Заказ (ID: {order_id}) успешно обновлён для пользователя {tg_user_id}.")
+            sql_new_cart = """
+                INSERT INTO orders (id_user, deliv_date, summa, id_type, adress, delivery_time, status)
+                VALUES (%s, NOW(), 0, NULL, '', NULL, 'Корзина')
+            """
+            mycursor.execute(sql_new_cart, (id_user,))
+            mydb.commit()
             return order_id
         except mysql.connector.Error as err:
-            logging.error(f"Ошибка создания заказа: {err}")
+            logging.error(f"Ошибка обновления заказа: {err}")
             mydb.rollback()
             return None
         finally:
@@ -309,21 +370,24 @@ def get_todays_orders():
         sql = """
             SELECT
                 o.id_orders,
-                o.date,
+                o.deliv_date,
                 o.summa,
-                dt.delivery_type,
+                o.delivery_time,
+                dt.name AS delivery_type,
                 o.delivery_time,
                 o.status,
+                o.adress,
                 u.phone,
-                u.tg_user_id
+                u.tg_user_id,
+                u.name
             FROM
                 orders o
             JOIN
                 user u ON o.id_user = u.id_user
             JOIN
                 delivtype dt ON o.id_type = dt.id_type
-            WHERE DATE(o.date) = CURDATE()
-            ORDER BY o.date DESC;
+            WHERE DATE(o.deliv_date) = CURDATE() AND o.status != 'Корзина' AND o.status != 'Завершен'
+            ORDER BY o.deliv_date DESC;
         """
         try:
             mycursor.execute(sql)
@@ -376,7 +440,7 @@ def get_admin_by_tg_id(tg_user_id):
     return None
 
 
-def register_admin(tg_user_id: int, password: str,name: str = None, phone: str = None):
+def register_admin(tg_user_id: int, password: str, name: str = None, phone: str = None):
     mydb = connect_to_db()
     if mydb:
         mycursor = mydb.cursor()
@@ -419,11 +483,12 @@ def verify_admin_password(tg_user_id, password):
             mydb.close()
     return False
 
+
 def get_delivery_types():
     mydb = connect_to_db()
     if mydb:
         mycursor = mydb.cursor(dictionary=True)
-        sql = "SELECT id_type, delivery_type, price_dost FROM delivtype"
+        sql = "SELECT id_type, name, price_dost FROM delivtype"
         try:
             mycursor.execute(sql)
             delivery_types = mycursor.fetchall()
@@ -496,7 +561,7 @@ def add_to_cart(tg_user_id, product_id, quantity):
         if basket_item:
             # 5. Товар уже есть — обновляем количество
             new_quantity = basket_item['quantity'] + quantity
-            sql_update_quantity = "UPDATE basket SET quantity = %s WHERE id_product = %s"
+            sql_update_quantity = "UPDATE basket SET quantity = %s WHERE id_basket = %s"
             mycursor.execute(sql_update_quantity, (new_quantity, basket_item['id_basket']))
         else:
             # 6. Получаем цену товара
@@ -546,6 +611,7 @@ def get_cart_items(tg_user_id):
             SELECT id_orders
             FROM orders
             WHERE id_user = %s
+            AND status = 'Корзина'
             """
             mycursor.execute(sql_get_orders, (id_user,))
             orders_result = mycursor.fetchall()
@@ -586,17 +652,105 @@ def get_cart_items(tg_user_id):
     return None
 
 
-def update_cart_item_quantity(cart_item_id, quantity):
+def get_orders_today():
+    mydb = connect_to_db()
+    if mydb:
+        mycursor = mydb.cursor(dictionary=True)  # Используем dictionary, чтобы получать результаты как словарь
+        try:
+            # Получаем сегодняшнюю дату в формате 'YYYY-MM-DD'
+            today = datetime.today()
+
+            # Запрос для получения всех заказов, сделанных сегодня
+            sql = """
+                SELECT o.id_orders, o.status, o.created_at, o.delivery_type, o.total_amount, u.phone, u.name AS user_name
+                FROM orders o
+                JOIN user u ON o.id_user = u.id_user
+                WHERE o.created_at >= %s AND o.created_at < %s
+            """
+            # Устанавливаем диапазон дат: с начала сегодняшнего дня до конца дня
+            start_of_day = f"{today} 00:00:00"
+            end_of_day = f"{today} 23:59:59"
+
+            mycursor.execute(sql, (start_of_day, end_of_day))
+            orders = mycursor.fetchall()
+
+            return orders
+        except mysql.connector.Error as err:
+            print(f"Ошибка при запросе заказов: {err}")
+            return []
+        finally:
+            mycursor.close()
+            mydb.close()
+    return []
+
+def update_cart_item_quantity(tg_user_id, product_id, quantity):
     mydb = connect_to_db()
     if mydb:
         mycursor = mydb.cursor()
         try:
-            sql = "UPDATE basket SET quantity = %s, price_to_quan = (SELECT price FROM product WHERE id_product = id_product) * %s WHERE id_basket = %s"
-            val = (quantity, quantity, cart_item_id)
-            mycursor.execute(sql, val)
+            # Шаг 1: Найдем заказ пользователя со статусом "Корзина"
+            sql_find_cart = """
+                SELECT id_orders 
+                FROM orders 
+                WHERE id_user = (SELECT id_user FROM user WHERE tg_user_id = %s) 
+                AND status = 'Корзина'
+                LIMIT 1
+            """
+            mycursor.execute(sql_find_cart, (tg_user_id,))
+            cart_id = mycursor.fetchone()
+
+            if cart_id is None:
+                logging.warning(f"Корзина для пользователя с tg_user_id={tg_user_id} не найдена.")
+                return False
+
+            cart_id = cart_id[0]  # Получаем id_orders корзины
+
+            # Шаг 2: Находим товар в корзине по id_product
+            sql_find_cart_item = """
+                SELECT id_basket, quantity 
+                FROM basket 
+                WHERE id_orders = %s AND id_product = %s
+            """
+            mycursor.execute(sql_find_cart_item, (cart_id, product_id))
+            cart_item = mycursor.fetchone()
+
+            if cart_item is None:
+                logging.warning(f"Товар с id_product={product_id} не найден в корзине для пользователя с tg_user_id={tg_user_id}.")
+                return False
+
+            id_basket, old_quantity = cart_item  # Получаем id_basket и старое количество товара
+
+            # Шаг 3: Получим цену товара
+            sql_find_product_price = """
+                SELECT price FROM product WHERE id_product = %s
+            """
+            mycursor.execute(sql_find_product_price, (product_id,))
+            product_price = mycursor.fetchone()
+
+            if product_price is None:
+                logging.warning(f"Товар с id_product={product_id} не найден.")
+                return False
+
+            product_price = product_price[0]  # Получаем цену товара
+
+            # Шаг 4: Обновляем количество товара и пересчитываем цену
+            sql_update = """
+                UPDATE basket 
+                SET quantity = %s, 
+                    price_to_quan = %s * %s
+                WHERE id_basket = %s
+            """
+            val = (quantity, product_price, quantity, id_basket)
+            mycursor.execute(sql_update, val)
             mydb.commit()
-            logging.info(f"Количество товара в корзине (ID: {cart_item_id}) обновлено на {quantity}.")
-            return True
+
+            if mycursor.rowcount > 0:
+                logging.info(f"Количество товара с id_basket={id_basket} в корзине обновлено на {quantity}.")
+                return True
+            else:
+                logging.warning(f"Не удалось обновить товар с id_basket={id_basket} в корзине для пользователя с tg_user_id={tg_user_id}.")
+                return False
+
         except mysql.connector.Error as err:
             logging.error(f"Ошибка обновления количества товара в корзине: {err}")
             mydb.rollback()
@@ -607,25 +761,48 @@ def update_cart_item_quantity(cart_item_id, quantity):
     return False
 
 
-def remove_cart_item(cart_item_id):
-    mydb = connect_to_db()
-    if mydb:
-        mycursor = mydb.cursor()
-        try:
-            sql = "DELETE FROM basket WHERE id_basket = %s"
-            mycursor.execute(sql, (cart_item_id,))
-            mydb.commit()
-            logging.info(f"Товар (ID: {cart_item_id}) удален из корзины.")
-            return True
-        except mysql.connector.Error as err:
-            logging.error(f"Ошибка удаления товара из корзины: {err}")
-            mydb.rollback()
-            return False
-        finally:
-            mycursor.close()
-            mydb.close()
-    return False
 
+def remove_item_from_cart(tg_user_id, product_id):
+    mydb = connect_to_db()
+    try:
+        mycursor = mydb.cursor()
+        mydb.start_transaction()
+
+        # Удаление товара из корзины
+        sql_basket = """
+            DELETE FROM basket
+            WHERE id_orders IN (
+                SELECT id_orders FROM orders
+                WHERE id_user = (SELECT id_user FROM user WHERE tg_user_id = %s)
+                AND status = 'Корзина'
+            )
+            AND id_product = %s
+        """
+        print("executing sql_basket")
+        mycursor.execute(sql_basket, (tg_user_id, product_id))
+        mydb.commit()
+
+        # Удаление заказа, если корзина пуста
+        sql_orders = """
+            DELETE FROM orders
+            WHERE id_user = (SELECT id_user FROM user WHERE tg_user_id = %s)
+            AND status = 'Корзина'
+            AND NOT EXISTS (
+                SELECT 1 FROM basket WHERE id_orders = orders.id_orders
+            )
+        """
+        print("executing sql_orders")
+        mycursor.execute(sql_orders, (tg_user_id,))
+
+        mydb.commit()
+        return mycursor.rowcount > 0
+    except Exception as e:
+        mydb.rollback()
+        logging.error(f"Ошибка при удалении товара: {e}")
+        return False
+    finally:
+        mycursor.close()
+        mydb.close()
 
 
 def has_any_admins():
@@ -668,6 +845,7 @@ def get_product_details(product_id):
             mycursor.close()
             mydb.close()
 
+
 def get_products_by_category_as_menu(category_id) -> dict | None:
     mydb = connect_to_db()
     if mydb:
@@ -685,6 +863,7 @@ def get_products_by_category_as_menu(category_id) -> dict | None:
             mycursor.close()
             mydb.close()
     return None
+
 
 def get_product_id_by_name(product_name):
     mydb = connect_to_db()
