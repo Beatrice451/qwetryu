@@ -5,14 +5,16 @@ from datetime import datetime
 from aiogram import types, Dispatcher, F
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import FSInputFile, InlineKeyboardMarkup
+from aiogram.types import FSInputFile
 
 from db.db_utils import get_user, register_user, get_category_by_name, get_products_by_category, get_order_history, \
     get_order_items, get_order_status, update_order, get_product_details, get_delivery_types, add_to_cart, \
-    get_cart_items, update_cart_item_quantity, get_menu_categories, get_delivery_price, remove_item_from_cart
+    get_cart_items, update_cart_item_quantity, get_menu_categories, get_delivery_price, remove_item_from_cart, \
+    cancel_order_by_id
 from keyboards.keyboards import nav_keyboard, categories_keyboard, get_delivery_type_markup, \
     delivery_time_keyboard, add_select_button, add_cancel_select_button, add_order_button, \
-    add_accept_data_processing_button, generate_edit_cart_keyboard, generate_edit_actions_keyboard
+    add_accept_data_processing_button, generate_edit_cart_keyboard, generate_edit_actions_keyboard, \
+    add_cancel_order_keyboard
 from states.states import Registration, Order, Admin
 from utils.utils import is_admin, delete_saved_messages
 
@@ -244,7 +246,7 @@ async def view_order_history(message: types.Message):
 Тип доставки: {order['name']}
 ------------------------
 """
-        await message.answer(text)
+        await message.answer(text, reply_markup=add_cancel_order_keyboard(tg_user_id))
     else:
         await message.answer("У вас пока нет заказов.")
 
@@ -406,9 +408,10 @@ async def process_delivery_time(callback_query: types.CallbackQuery, state: FSMC
     if delivery_time_choice.lower() == "asap":
         await state.update_data(delivery_time="ASAP")
         await state.set_state(Order.accepting_data_processing)
-        msg = await callback_query.message.answer(
-            "Для завершения оформления заказа необходимо согласие на обработку персональных данных.",
-            reply_markup=add_accept_data_processing_button()
+        msg = await callback_query.message.answer_document(
+            document=FSInputFile("resources/Согласие_на_обработку_персональных_данных.pdf"),
+            caption="Для завершения оформления заказа необходимо согласие на обработку персональных данных.",
+            reply_markup=add_accept_data_processing_button(),
         )
         messages_for_deletion.append(msg.message_id)
         await state.update_data(messages_for_deletion=messages_for_deletion)
@@ -515,7 +518,6 @@ async def process_edit_item(callback_query: types.CallbackQuery, state: FSMConte
 
 
 async def process_delete_item(callback_query: types.CallbackQuery, state: FSMContext):
-    print(callback_query.data)
     product_id = int(callback_query.data.split('_')[-1])
     tg_user_id = callback_query.from_user.id
     print(tg_user_id)
@@ -528,6 +530,16 @@ async def process_delete_item(callback_query: types.CallbackQuery, state: FSMCon
         await view_cart(callback_query.message, state)
     except Exception:
         await callback_query.answer("Произошла ошибка при удалении товара.")
+
+async def process_cancel_order(callback_query: types.CallbackQuery):
+    order_id = int(callback_query.data.split('_')[-1])
+    try:
+        cancel_order_by_id(order_id)
+        await callback_query.message.edit_text(text=f"Заказ №{order_id} успешно отменён")
+        chat_id = 1080797132
+        await callback_query.bot.send_message(chat_id=chat_id, text=f"Заказ №{order_id} был отменён")
+    except Exception as e:
+        await callback_query.message.edit_text(text=f"Всё пошло по пизде: {e}")
 
 
 def register_user_handlers(dp: Dispatcher):
@@ -570,3 +582,4 @@ def register_user_handlers(dp: Dispatcher):
     dp.callback_query.register(process_delete_item, F.data.startswith("remove_from_cart_"))
     dp.callback_query.register(update_quantity_callback, F.data.startswith("edit_quantity_"))
     dp.message.register(process_new_quantity, StateFilter(Order.waiting_for_new_quantity))
+    dp.callback_query.register(process_cancel_order, F.data.startswith("cancel_order_"))

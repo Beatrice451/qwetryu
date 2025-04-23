@@ -5,7 +5,7 @@ from datetime import datetime
 from aiogram import types, Dispatcher, F
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import any_state
+from aiogram.fsm.state import default_state, any_state
 from aiogram.types import ContentType, ReplyKeyboardRemove
 
 from db.db_utils import get_admin_by_tg_id, register_admin, delete_product, add_product, verify_admin_password, \
@@ -101,6 +101,7 @@ async def set_order_status_start(message: types.Message, state: FSMContext):
     await state.update_data(messages_for_deletion=messages_for_deletion)
 
 
+# TODO create method to get order info by id
 async def process_set_order_status_id_entered(message: types.Message, state: FSMContext):
     data = await state.get_data()
     messages_for_deletion = data.get("messages_for_deletion", [])
@@ -114,7 +115,6 @@ async def process_set_order_status_id_entered(message: types.Message, state: FSM
     await state.set_state(Admin.waiting_for_order_status)
     await state.update_data(user_msg=message, messages_for_deletion=messages_for_deletion)
     await message.answer("Укажите новый статус заказа:", reply_markup=status_keyboard(order_id))
-
 
 async def process_update_order_status(callback_query: types.CallbackQuery, state: FSMContext):
     _, _, order_id, status = callback_query.data.split("_")
@@ -131,7 +131,6 @@ async def process_update_order_status(callback_query: types.CallbackQuery, state
 
     await state.clear()
     await callback_query.answer()
-
 
 async def add_product_start(message: types.Message, state: FSMContext):
     if not is_admin(message.from_user.id):
@@ -297,7 +296,6 @@ async def view_orders(message: types.Message, state: FSMContext):
             await message.answer(f"📊 Заказы за сегодня:\n\n{order_details}")
     else:
         await message.answer("ℹ️ Заказы за сегодняшний день не найдены.")
-
 
 def register_admin_handlers(dp: Dispatcher):
     # Команды управления админ-панелью

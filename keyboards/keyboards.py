@@ -2,7 +2,7 @@ import logging
 
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 
-from db.db_utils import get_menu_categories, get_delivery_types, get_products_by_category_as_menu
+from db.db_utils import get_menu_categories, get_delivery_types, get_products_by_category_as_menu, get_order_history
 
 
 # Навигационное меню
@@ -18,6 +18,7 @@ def nav_keyboard(is_admin=False):
         keyboard.keyboard.append([KeyboardButton(text="Админ-панель")])
 
     return keyboard
+
 
 def categories_keyboard():
     categories = get_menu_categories()
@@ -36,6 +37,7 @@ def categories_keyboard():
     keyboard.keyboard.append([KeyboardButton(text="Назад")])
 
     return keyboard
+
 
 def get_deletion_keyboard(category_id):
     products = get_products_by_category_as_menu(category_id)
@@ -56,21 +58,6 @@ def get_deletion_keyboard(category_id):
 
     return keyboard
 
-
-# def get_delivery_type_markup():
-#     delivery_types = get_delivery_types()  # Получаем все типы доставки
-#     if delivery_types:
-#         keyboard = InlineKeyboardMarkup(
-#             row_width=2,
-#             inline_keyboard=[
-#                 [InlineKeyboardButton(text=delivery_types['delivery_type'], callback_data=f"delivery_type_{delivery_types['id_type']}")]
-#                 for delivery_type in (delivery_types,
-#                                       [InlineKeyboardButton(text="Назад", callback_data="nav_menu()")])
-#             ]
-#         )
-#         return keyboard
-#     else:
-#         return None
 
 def get_delivery_type_markup():
     delivery_types = get_delivery_types()  # Ожидается список словарей [{'id_type': ..., 'delivery_type': ...}, ...]
@@ -104,6 +91,7 @@ def delivery_time_keyboard():
     ])
     return keyboard
 
+
 def admin_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
@@ -114,6 +102,7 @@ def admin_keyboard() -> ReplyKeyboardMarkup:
         input_field_placeholder="Выберите действие"
     )
 
+
 def status_keyboard(order_id: int) -> InlineKeyboardMarkup:
     statuses = ["Оформлен", "Готовится", "Передан в доставку", "Готов", "Завершен"]
 
@@ -122,22 +111,6 @@ def status_keyboard(order_id: int) -> InlineKeyboardMarkup:
     ])
     return keyboard
 
-# def product_delete_keyboard(product_id):
-#     keyboard = InlineKeyboardMarkup()
-#     keyboard.add(InlineKeyboardButton("Удалить", callback_data=f"delete_product:{product_id}"))
-#     return keyboard
-
-def get_product_inline_markup(products):
-    keyboard = InlineKeyboardMarkup(row_width=2)
-    for product in products:
-        keyboard.add(InlineKeyboardButton(text=f"Добавить {product['name']} в корзину", callback_data=f"add_to_cart:{product['id_product']}"))
-    return keyboard
-
-# def get_cart_item_markup(cart_item_id):
-#    markup = InlineKeyboardMarkup()
-#    markup.add(InlineKeyboardButton("Изменить количество", callback_data=f"update_quantity:{cart_item_id}"))
-#    markup.add(InlineKeyboardButton("Удалить из корзины", callback_data=f"remove_from_cart:{cart_item_id}"))
-#    return markup
 
 def add_select_button(product_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
@@ -153,6 +126,7 @@ def add_cancel_select_button() -> InlineKeyboardMarkup:
         ]
     )
 
+
 def add_order_button(order_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -160,6 +134,7 @@ def add_order_button(order_id: int) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="Редактировать", callback_data=f"edit_cart_{order_id}")]
         ]
     )
+
 
 def generate_edit_cart_keyboard(cart_items) -> InlineKeyboardMarkup:
     keyboard = []
@@ -171,6 +146,7 @@ def generate_edit_cart_keyboard(cart_items) -> InlineKeyboardMarkup:
 
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
+
 def generate_edit_actions_keyboard(product_id) -> InlineKeyboardMarkup:
     keyboard = [
         [InlineKeyboardButton(text="Изменить количество", callback_data=f"edit_quantity_{product_id}")],
@@ -180,9 +156,25 @@ def generate_edit_actions_keyboard(product_id) -> InlineKeyboardMarkup:
 
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
+
 def add_accept_data_processing_button() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="Подтвердить", callback_data="accept_data_processing")]
         ]
+    )
+
+
+def add_cancel_order_keyboard(tg_user_id) -> InlineKeyboardMarkup:
+    orders = get_order_history(tg_user_id)
+    keyboard = []
+    for order in orders:
+        if order['status'] in ['Оформлен', 'Готовится']:
+            keyboard.append(
+                [InlineKeyboardButton(text=f"Отменить заказ №{order['id_orders']}",
+                                      callback_data=f"cancel_order_{order['id_orders']}")]
+            )
+            print(f"cancel_order_{order['id_orders']}")
+    return InlineKeyboardMarkup(
+        inline_keyboard=keyboard
     )

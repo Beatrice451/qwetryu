@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime
 
-import bcrypt  # Для хеширования паролей
+import bcrypt
 import mysql.connector
 
 from config import DB_HOST, DB_USER, DB_PASSWORD, DB_NAME
@@ -99,6 +99,27 @@ def get_products_by_category(category_id):
             mydb.close()
     return None
 
+def cancel_order_by_id(order_id):
+    mydb = connect_to_db()
+    if mydb:
+        mycursor = mydb.cursor()
+        sql = """
+        UPDATE Orders
+        SET status = 'Отменен'
+        WHERE id_orders = %s;
+        """
+        val = (order_id,)
+        try:
+            mycursor.execute(sql, val)
+            mydb.commit()
+            print(f"Заказ {order_id} успешно отменен")
+        except mysql.connector.Error as err:
+            logging.error(f"Ошибка при отмене заказа: {err}")
+            return None
+        finally:
+            mycursor.close()
+            mydb.close()
+    return None
 
 def get_order_history(tg_user_id):
     mydb = connect_to_db()
@@ -882,3 +903,23 @@ def get_product_id_by_name(product_name):
             mycursor.close()
             mydb.close()
     return None
+
+def get_admins():
+    mydb = connect_to_db()
+    if mydb:
+        mycursor = mydb.cursor()
+        sql = """
+        SELECT id_admin
+        FROM admin
+        LIMIT 1;
+        """
+        try:
+            mycursor.execute(sql)
+            admins = mycursor.fetchall()
+            return admins
+        except mysql.connector.Error as err:
+            logging.error(f"Ошибка получения администраторов: {err}")
+            return None
+        finally:
+            mycursor.close()
+            mydb.close()
